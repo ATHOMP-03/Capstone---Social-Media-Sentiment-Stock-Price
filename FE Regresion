@@ -1,0 +1,47 @@
+# pip install linearmodels pandas numpy
+
+import numpy as np
+import pandas as pd
+from linearmodels.panel import PanelOLS
+
+# -----------------------------
+# 1) Load daily panel
+# -----------------------------
+# Required columns: date, ticker, px_last, sentiment
+df = pd.read_csv("panel_for_regression_daily.csv", parse_dates=["date"])
+
+# Sort for proper lagging
+df = df.sort_values(["ticker", "date"]).reset_index(drop=True)
+
+# -----------------------------
+# 2) Build DAILY lags
+# -----------------------------
+lag_map = {
+    "lag_1d": 1,
+    "lag_2d": 2,
+    "lag_5d": 5,
+    "lag_7d": 7,
+}
+
+for col, d in lag_map.items():
+    df[col] = df.groupby("ticker")["sentiment"].shift(d)
+
+lag_cols = list(lag_map.keys())
+
+# Drop rows missing required values
+df = df.dropna(subset=["px_last", "sentiment"] + lag_cols).copy()
+
+# -----------------------------
+# 3) PanelOLS: ticker fixed effects
+# -----------------------------
+df = df.set_index(["ticker", "date"])
+
+y = df["px_last"]
+X = df[["sentiment"] + lag_cols]
+
+mod = PanelOLS(y, X, entity_effects=True)
+
+# Clustered SEs by ticker
+res = mod.fit(cov_type="clustered", cluster_entity=True)
+
+print(res.summary)
