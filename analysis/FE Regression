@@ -1,1 +1,67 @@
+# pip install linearmodels pandas numpy
 
+import numpy as np
+import pandas as pd
+from linearmodels.panel import PanelOLS
+
+# -----------------------------
+# 1) Load daily panel
+# -----------------------------
+df = pd.read_csv("panel_for_regression_daily.csv", parse_dates=["date"])
+df = df.sort_values(["ticker", "date"]).reset_index(drop=True)
+
+# -----------------------------
+# 2) Create price deltas from post-day open to horizon close
+# -----------------------------
+horizons = [0, 1, 2, 5, 7]
+
+# Lead closes for k>0
+for k in horizons:
+    if k == 0:
+        df["delta_0d"] = df["px_close"] - df["px_open"]
+    else:
+        df[f"close_lead_{k}d"] = df.groupby("ticker")["px_close"].shift(-k)
+        df[f"delta_{k}d"] = df[f"close_lead_{k}d"] - df["px_open"]
+
+# -----------------------------
+# 3) Optional: sentiment lags (if you still want them as controls)
+#    If you ONLY want sentiment on post day, you can skip this section.
+# -----------------------------
+lag_map = {"lag_1d": 1, "lag_2d": 2, "lag_5d": 5, "lag_7d": 7}
+for col, d in lag_map.items():
+    df[col] = df.groupby("ticker")["sentiment"].shift(d)
+lag_cols = list(lag_map.keys())
+
+# -----------------------------
+# 4) Run one regression per horizon with ticker fixed effects
+# -----------------------------
+# Choose regressors:
+#   A) Minimal: X = ["sentiment"]
+#   B) With sentiment lags: X = ["sentiment"] + lag_cols
+USE_SENTIMENT_LAGS = True
+X_cols = ["sentiment"] + (lag_cols if USE_SENTIMENT_LAGS else [])
+
+results = {}
+
+for k in horizons:
+    y_col = f"delta_{k}d"
+
+    needed = ["ticker", "date", y_col] + X_cols
+    d = df.dropna(subset=needed).copy()
+
+    # PanelOLS indexing
+    d = d.set_index(["ticker", "date"])
+
+    y = d[y_col]
+    X = d[X_cols]
+
+    # ticker fixed effects
+    mod = PanelOLS(y, X, entity_effects=True)
+
+    # clustered SEs by ticker
+    res = mod.fit(cov_type="clustered", cluster_entity=True)
+
+    results[k] = res
+    print("\n" + "=" * 90)
+    print(f"Horizon: {k} day(s) | Dependent variable: {y_col} = Close(t+k) - Open(t)")
+    print(res.summary)
